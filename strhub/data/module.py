@@ -14,15 +14,44 @@
 # limitations under the License.
 
 from pathlib import PurePath
-from typing import Optional, Callable, Sequence, Tuple
+from typing import Callable, Optional, Sequence, Tuple
 
 import pytorch_lightning as pl
+import torchvision.transforms.functional as F
 from torch.utils.data import DataLoader
 from torchvision import transforms as T
 
-from .dataset import build_tree_dataset, LmdbDataset
+from .dataset import LmdbDataset, build_tree_dataset
 
 
+# https://github.com/pytorch/vision/issues/6236
+class ResizeWithPad:
+    def __init__(self, w, h):
+        self.w = w
+        self.h = h
+
+    def __call__(self, image):
+        w_1, h_1 = image.size
+        ratio_f = self.w / self.h
+        ratio_1 = w_1 / h_1
+        padding_color = 255
+
+        # check if the original and final aspect ratios are the same within a margin
+        if round(ratio_1, 2) != round(ratio_f, 2):
+
+            # padding to preserve aspect ratio
+            hp = int(w_1/ratio_f - h_1)
+            wp = int(ratio_f * h_1 - w_1)
+            if hp > 0 and wp < 0:
+                hp = hp // 2
+                image = F.pad(image, (0, hp, 0, hp), padding_color, "constant")
+                return F.resize(image, [self.h, self.w])
+
+            elif hp < 0 and wp > 0:
+                wp = wp // 2
+                image = F.pad(image, (wp, 0, wp, 0), padding_color, "constant")
+                return F.resize(image, [self.h, self.w])
+        return F.resize(image, [self.h, self.w])
 class SceneTextDataModule(pl.LightningDataModule):
     TEST_BENCHMARK_SUB = ('IIIT5k', 'SVT', 'IC13_857', 'IC15_1811', 'SVTP', 'CUTE80')
     TEST_BENCHMARK = ('IIIT5k', 'SVT', 'IC13_1015', 'IC15_2077', 'SVTP', 'CUTE80')
@@ -53,6 +82,7 @@ class SceneTextDataModule(pl.LightningDataModule):
 
     @staticmethod
     def get_transform(img_size: Tuple[int], augment: bool = False, rotation: int = 0):
+        height, width = img_size
         transforms = []
         if augment:
             from .augment import rand_augment_transform
@@ -60,7 +90,8 @@ class SceneTextDataModule(pl.LightningDataModule):
         if rotation:
             transforms.append(lambda img: img.rotate(rotation, expand=True))
         transforms.extend([
-            T.Resize(img_size, T.InterpolationMode.BICUBIC),
+            # T.Resize(img_size, T.InterpolationMode.BICUBIC),
+            ResizeWithPad(width, height),
             T.ToTensor(),
             T.Normalize(0.5, 0.5)
         ])
